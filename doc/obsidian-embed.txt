@@ -1,0 +1,45 @@
+*obsidian-embed.nvim* Render Obsidian note embeds inline.
+
+===============================================================================
+Contents                                                        *obsidian-embed*
+
+Introduction |obsidian-embed-introduction|
+Setup        |obsidian-embed-setup|
+Commands     |obsidian-embed-commands|
+
+===============================================================================
+INTRODUCTION                                            *obsidian-embed-introduction*
+
+obsidian-embed.nvim renders note embeds in buffers managed by obsidian.nvim.
+It requires obsidian.nvim to be configured before |obsidian-embed.setup()|.
+
+===============================================================================
+SETUP                                                          *obsidian-embed-setup*
+
+>
+  require("obsidian-embed").setup({})
+<
+
+The optional `presentation` table accepts:
+
+  frontmatter      Render frontmatter. Defaults to false.
+  source           "reveal_cursor", "conceal", or "show".
+  rail             Prefix rendered lines. Defaults to "│ ".
+  highlights.text  Highlight group for rendered text.
+  highlights.rail  Highlight group for the rail.
+  highlights.warning Highlight group for errors and warnings.
+  nowrap_overflow  Currently only "trunc" is supported.
+
+===============================================================================
+COMMANDS                                                    *obsidian-embed-commands*
+
+:Obsidian embed toggle
+        Toggle rendering in the current buffer.
+
+:Obsidian embed refresh
+        Refresh rendering in the current buffer.
+
+:Obsidian embed inspect
+        Print the current buffer's lifecycle state.
+
+vim:tw=78:ts=8:noet:ft=help:norl:
