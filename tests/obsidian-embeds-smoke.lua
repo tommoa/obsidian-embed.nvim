@@ -66,6 +66,12 @@ write_file(root .. "/Outer/NestedDir/Child.md", {
   "child relative body",
 })
 
+write_file(root .. "/NestedProvider.md", { "- ![[Width.provider]]" })
+write_file(root .. "/MainNestedProvider.md", { "  - ![[NestedProvider]]" })
+write_file(root .. "/NestedProviderCap.md", { "before", "![[Width.provider]]", "after" })
+write_file(root .. "/MainNestedProviderCap.md", { "![[NestedProviderCap]]", "![[PlainAlias]]" })
+write_file(root .. "/MainDirectProviderCap.md", { "![[Width.provider]]", "![[PlainAlias]]" })
+
 write_file(root .. "/CacheOuter.md", {
   "before cache inner",
   "![[CacheInner]]",
@@ -1224,6 +1230,85 @@ assert_true(projected_text(wide_win) == long_embed_line, "wide-window wrapping s
 assert_true(projected_text(narrow_win) == long_embed_line, "narrow-window wrapping should preserve text")
 vim.api.nvim_win_close(narrow_win, true)
 vim.api.nvim_set_current_win(wide_win)
+
+-- A nested provider must receive the text width of each host window after
+-- both the outer list and the nested list have reserved their prefixes.
+local projected_provider_widths = {}
+local unregister_width_provider = embeds.register_provider({
+  name = "smoke_nested_width",
+  match = function(ref) return ref.target == "Width.provider" end,
+  render_async = function(_, _, done)
+    done({ project = function(width)
+      projected_provider_widths[#projected_provider_widths + 1] = width
+      return { { { "nested width " .. width, "Normal" } } }
+    end })
+  end,
+})
+vim.cmd.edit(root .. "/MainNestedProvider.md")
+local nested_provider_bufnr = vim.api.nvim_get_current_buf()
+vim.b[nested_provider_bufnr].obsidian_buffer = true
+embeds.setup()
+testlib.wait_complete(embeds, nested_provider_bufnr)
+vim.cmd("vsplit")
+local nested_narrow_win = vim.api.nvim_get_current_win()
+vim.api.nvim_win_set_buf(nested_narrow_win, nested_provider_bufnr)
+vim.api.nvim_win_set_width(wide_win, 52)
+local function nested_provider_width(winid)
+  local before = #projected_provider_widths
+  local marks = testlib.projected_marks(nested_provider_bufnr, winid)
+  assert_true(#projected_provider_widths > before, "nested provider should project for each host window")
+  local width = projected_provider_widths[#projected_provider_widths]
+  local text = ""
+  for _, mark in ipairs(marks) do
+    for _, chunk in ipairs(mark[4].virt_text or {}) do text = text .. chunk[1] end
+    for _, line in ipairs(mark[4].virt_lines or {}) do
+      for _, chunk in ipairs(line) do text = text .. chunk[1] end
+    end
+  end
+  assert_contains(text, "nested width " .. width, "nested provider output should reflect its host width")
+  local available = vim.api.nvim_win_get_width(winid)
+  if not require("obsidian-embed.config").get().virt_lines_leftcol then
+    available = available - (vim.fn.getwininfo(winid)[1].textoff or 0)
+  end
+  local rail_width = vim.fn.strdisplaywidth(require("obsidian-embed.config").get().presentation.rail)
+  assert_true(width == math.max(1, available - 2 * rail_width - 6),
+    "nested provider width should reserve both rails and list continuations")
+  return width
+end
+local nested_wide_width = nested_provider_width(wide_win)
+local nested_narrow_width = nested_provider_width(nested_narrow_win)
+assert_true(nested_wide_width ~= nested_narrow_width, "split windows should project nested providers at different widths")
+vim.api.nvim_win_close(nested_narrow_win, true)
+vim.api.nvim_set_current_win(wide_win)
+vim.api.nvim_win_set_buf(wide_win, long_bufnr)
+
+-- Deferred blocks still count toward the active-render budget before any
+-- window projects them. Keep one row in flight to make admission deterministic.
+local render_policy = require("obsidian-embed.policy")
+local old_line_limit, old_in_flight, old_idle_ms = render_policy.active_line_limit,
+  render_policy.max_in_flight, render_policy.idle_ms
+render_policy.active_line_limit, render_policy.max_in_flight, render_policy.idle_ms = 1, 1, 1000
+local function assert_provider_row_capped(path)
+  vim.cmd.edit(root .. "/" .. path)
+  local cap_bufnr = vim.api.nvim_get_current_buf()
+  vim.b[cap_bufnr].obsidian_buffer = true
+  embeds.setup()
+  assert_true(vim.wait(3000, function()
+    local units = embeds.inspect(cap_bufnr).units
+    return units.ready == 1 and units.pending == 1
+  end, 10), "deferred provider row should pause later active work: " .. path)
+  vim.wait(50)
+  local units = embeds.inspect(cap_bufnr).units
+  assert_true(units.ready == 1 and units.pending == 1,
+    "active line cap should hold until the idle gate: " .. path)
+  embeds.toggle(cap_bufnr)
+end
+assert_provider_row_capped("MainNestedProviderCap.md")
+assert_provider_row_capped("MainDirectProviderCap.md")
+render_policy.active_line_limit, render_policy.max_in_flight, render_policy.idle_ms =
+  old_line_limit, old_in_flight, old_idle_ms
+vim.api.nvim_win_set_buf(wide_win, long_bufnr)
+unregister_width_provider()
 
 -- Automatic sign columns change textoff without changing the signcolumn
 -- option. The presenter must notice the live layout change during redraw.

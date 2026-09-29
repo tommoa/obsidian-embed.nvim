@@ -358,7 +358,7 @@ local function start_render(bufnr, session, row)
       type = "row_completed", generation = generation, row = row,
       result = result, error = err, embed_count = #analyzed_row.refs,
       line_count = result and vim.iter(result.blocks or {}):fold(0, function(count, block)
-        return count + #(block.lines or {})
+        return count + (block.line_count or #(block.lines or {}))
       end) or 0,
     })
   end

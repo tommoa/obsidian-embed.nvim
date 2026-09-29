@@ -90,11 +90,31 @@ local function prefix_lines(lines, first_prefix, continuation_prefix)
   return out
 end
 
+---Reserve the nested rail and host continuation before asking a child provider
+---to lay out its content. The presenter has already reserved the outer rail.
+local function child_width(width, continuation_prefix)
+  return math.max(1, width - vim.fn.strdisplaywidth(opts().presentation.rail)
+    - vim.fn.strdisplaywidth(continuation_prefix or ""))
+end
+
+---Expand mixed static lines and deferred child projections in source order.
+local function project_parts(parts, width)
+  local lines = {}
+  for _, part in ipairs(parts) do
+    if type(part) == "function" then
+      append_lines(lines, part(width))
+    else
+      lines[#lines + 1] = part
+    end
+  end
+  return lines
+end
+
 ---Analyze and recursively render a selected note slice without blocking.
 ---@param api table
 ---@param lines string[]
 ---@param ctx ObsidianEmbedsRenderContext
----@param done fun(lines: ObsidianEmbedsVirtLine[]?, err?: string)
+---@param done fun(rendered: ObsidianEmbedsVirtLine[]|fun(width: integer): ObsidianEmbedsVirtLine[]|nil, err?: string, line_count?: integer)
 local function render_lines_async(api, lines, ctx, done)
   local analysis_key = table.concat(lines, "\n")
   local analysis = ctx.cache_read and ctx.cache_read("analysis", analysis_key) or nil
@@ -115,6 +135,8 @@ local function render_lines_async(api, lines, ctx, done)
     ctx.cache_write("analysis", analysis_key, analysis)
   end
   local out = {}
+  local deferred = false
+  local line_count = 0
   local line_index = 1
 
   ---Render the next analyzed line, continuing until the slice is exhausted.
@@ -122,7 +144,7 @@ local function render_lines_async(api, lines, ctx, done)
     local line = lines[line_index]
     local analyzed_row = analysis.rows[line_index]
     if not line or not analyzed_row then
-      done(out)
+      done(deferred and function(width) return project_parts(out, width) end or out, nil, line_count)
       return
     end
     line_index = line_index + 1
@@ -135,18 +157,24 @@ local function render_lines_async(api, lines, ctx, done)
     if analyzed_row.exact_embed and refs[1] then
       local child_ctx = state.derive(ctx, { depth = ctx.depth + 1 })
       -- Continue the line loop after an exact nested embed finishes rendering.
-      api.safe_render_ref_async(refs[1], child_ctx, function(rendered)
-        append_lines(out, prefix_lines(
-          rendered,
-          analyzed_row.host.prefix,
-          analyzed_row.host.continuation
-        ))
+      api.safe_render_ref_async(refs[1], child_ctx, function(rendered, child_line_count)
+        line_count = line_count + child_line_count
+        if type(rendered) == "function" then
+          deferred = true
+          out[#out + 1] = function(width)
+            return prefix_lines(rendered(child_width(width, analyzed_row.host.continuation)),
+              analyzed_row.host.prefix, analyzed_row.host.continuation)
+          end
+        else
+          append_lines(out, prefix_lines(rendered, analyzed_row.host.prefix, analyzed_row.host.continuation))
+        end
         queue_continuation(ctx, "nested_line_ready", render_next_line)
       end)
       return
     end
 
     out[#out + 1] = highlight.precomputed_line(analyzed_row.chunks, ctx.depth, opts())
+    line_count = line_count + 1
     local ref_index = 1
     ---Render inline embeds on the current line in source order.
     local function render_next_ref()
@@ -158,12 +186,18 @@ local function render_lines_async(api, lines, ctx, done)
       ref_index = ref_index + 1
       local child_ctx = state.derive(ctx, { depth = ctx.depth + 1 })
       -- Continue the ref loop after one inline embed finishes rendering.
-      api.safe_render_ref_async(ref, child_ctx, function(rendered)
-        append_lines(out, prefix_lines(
-          rendered,
-          analyzed_row.host.continuation,
-          analyzed_row.host.continuation
-        ))
+      api.safe_render_ref_async(ref, child_ctx, function(rendered, child_line_count)
+        line_count = line_count + child_line_count
+        if type(rendered) == "function" then
+          deferred = true
+          out[#out + 1] = function(width)
+            return prefix_lines(rendered(child_width(width, analyzed_row.host.continuation)),
+              analyzed_row.host.continuation, analyzed_row.host.continuation)
+          end
+        else
+          append_lines(out, prefix_lines(rendered, analyzed_row.host.continuation,
+            analyzed_row.host.continuation))
+        end
         queue_continuation(ctx, "nested_ref_ready", render_next_ref)
       end)
     end
@@ -177,7 +211,7 @@ end
 ---@param api table
 ---@param ref ObsidianEmbedsRef
 ---@param ctx ObsidianEmbedsRenderContext
----@param done fun(lines: ObsidianEmbedsVirtLine[]?, err?: string)
+---@param done fun(rendered: ObsidianEmbedsVirtLine[]|fun(width: integer): ObsidianEmbedsVirtLine[]|nil, err?: string, line_count?: integer)
 function M.render_ref_async(api, ref, ctx, done)
   ctx = state.new_render_context(ctx)
   if resolver.should_ignore_ref(ref) then
@@ -188,14 +222,15 @@ function M.render_ref_async(api, ref, ctx, done)
     return
   end
 
-  -- Providers take precedence over the default note resolver. Recursive note
-  -- rendering has no final window width yet, so it projects with the current
-  -- screen width; top-level rows retain the projector until presentation.
-  -- TODO(phase6): carry provider projectors through recursive render products
-  -- so nested embeds use the final window width instead of this fallback.
+  -- Providers take precedence over the default note resolver. Keep their
+  -- projection deferred until the presenter knows the host window width.
   if provider_render_async(ref, ctx, function(result, provider_err)
     if provider_err then done(nil, provider_err); return end
-    done(highlight.with_rail(project_provider(result, vim.o.columns, ctx.depth), opts()))
+    -- The provider's final line count depends on width. Reserve one line for
+    -- scheduler accounting while preserving counts from surrounding note text.
+    done(function(width)
+      return highlight.with_rail(project_provider(result, width, ctx.depth), opts())
+    end, nil, 1)
   end) then return end
 
   -- Select and render the resolved note candidates when lookup completes.
@@ -228,14 +263,21 @@ function M.render_ref_async(api, ref, ctx, done)
     end
     ctx.stack[key] = true
     -- Complete this ref after its selected note slice has recursively rendered.
-    render_lines_async(api, lines, state.for_note_context(ctx, note), function(rendered, render_err)
+    render_lines_async(api, lines, state.for_note_context(ctx, note), function(rendered, render_err, line_count)
       ctx.stack[key] = nil
       if render_err then
         done(nil, render_err)
         return
       end
-      append_lines(prefix, rendered)
-      done(highlight.with_rail(prefix, opts()))
+      if type(rendered) == "function" then
+        done(function(width)
+          local lines = vim.list_extend(vim.deepcopy(prefix), rendered(width))
+          return highlight.with_rail(lines, opts())
+        end, nil, #prefix + line_count)
+      else
+        append_lines(prefix, rendered)
+        done(highlight.with_rail(prefix, opts()))
+      end
     end)
   end)
 end
@@ -244,19 +286,20 @@ end
 ---@param api table
 ---@param ref ObsidianEmbedsRef
 ---@param ctx ObsidianEmbedsRenderContext
----@param done fun(lines: ObsidianEmbedsVirtLine[]?)
+---@param done fun(rendered: ObsidianEmbedsVirtLine[]|fun(width: integer): ObsidianEmbedsVirtLine[]|nil, line_count: integer)
 function M.safe_render_ref_async(api, ref, ctx, done)
   local completed = false
   ---Complete a safe render exactly once and normalize failures for display.
-  local function finish(lines, err)
+  local function finish(rendered, err, line_count)
     if completed then
       return
     end
     completed = true
     if err then
-      done(warn_block("Embed error: " .. tostring(err), ctx and ctx.depth or 1))
+      local warning = warn_block("Embed error: " .. tostring(err), ctx and ctx.depth or 1)
+      done(warning, #warning)
     else
-      done(lines)
+      done(rendered, line_count or #(rendered or {}))
     end
   end
   local ok, err = pcall(M.render_ref_async, api, ref, ctx, finish)
@@ -307,13 +350,18 @@ function M.render_analyzed_row_state_async(api, buffer_state, row, analyzed_row,
         project = function(width)
           return highlight.with_rail(project_provider(result, width, ctx.depth), opts())
         end,
+        line_count = 1,
       }
       queue_continuation(ctx, "row_provider_ready", render_next)
     end)
     if handled then return end
-    api.safe_render_ref_async(ref, ctx, function(rendered)
+    api.safe_render_ref_async(ref, ctx, function(rendered, line_count)
       rendered_refs[#rendered_refs + 1] = ref
-      blocks[#blocks + 1] = { ref = ref, lines = rendered or {} }
+      if type(rendered) == "function" then
+        blocks[#blocks + 1] = { ref = ref, project = rendered, line_count = line_count }
+      else
+        blocks[#blocks + 1] = { ref = ref, lines = rendered or {} }
+      end
       queue_continuation(ctx, "row_ref_ready", render_next)
     end)
   end

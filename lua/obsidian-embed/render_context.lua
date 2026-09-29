@@ -77,6 +77,7 @@ local M = {} -- Adapter-only render contexts; never stored in canonical state.
 ---@field ref ObsidianEmbedsRef
 ---@field lines? ObsidianEmbedsVirtLine[]
 ---@field project? fun(width: integer): ObsidianEmbedsVirtLine[]
+---@field line_count? integer Pre-projection scheduler count; each provider reserves one line.
 
 ---@class ObsidianEmbedsSameNoteRange
 ---@field start_row integer
