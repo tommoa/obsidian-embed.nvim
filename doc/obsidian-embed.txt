@@ -6,12 +6,13 @@ Contents                                                        *obsidian-embed*
 Introduction |obsidian-embed-introduction|
 Setup        |obsidian-embed-setup|
 Commands     |obsidian-embed-commands|
+Providers    |obsidian-embed-providers|
 
 ===============================================================================
 INTRODUCTION                                            *obsidian-embed-introduction*
 
 obsidian-embed.nvim renders note embeds in buffers managed by obsidian.nvim.
-It requires obsidian.nvim to be configured before |obsidian-embed.setup()|.
+It requires obsidian.nvim to be configured before |obsidian-embed-setup|.
 
 In Markdown pipe tables, each embed shows a single-line preview within the
 width of its source token. Longer previews end with an ellipsis; any pipes in
@@ -47,5 +48,75 @@ COMMANDS                                                    *obsidian-embed-comm
 
 :Obsidian embed inspect
         Print the current buffer's lifecycle state.
+
+===============================================================================
+PROVIDERS                                                  *obsidian-embed-providers*
+
+register_provider(provider)                    *obsidian-embed.register_provider()*
+
+Providers are tried in registration order before the built-in Markdown note
+renderer. URI and attachment embeds are skipped before provider
+matching. Registration is allowed before |obsidian-embed-setup| and returns an
+unregister function.
+Provider names must be non-empty and unique; calling the unregister function
+repeatedly is safe.
+
+The provider table has:
+
+  name          Unique provider name.
+  match         function(ref, ctx) -> boolean. A match error is rendered as an
+                error instead of trying later providers.
+  render_async  function(ref, ctx, done) -> cancel_function or nil. Call
+                done(result) on success or done(nil, error_message) on failure.
+                Completion is accepted once; callbacks after cancellation are
+                ignored. Return a function to stop pending work when the render
+                generation is replaced or the buffer is released.
+
+The reference includes `target`, the target from the embed syntax. The context
+contains `bufnr`, `workspace_root`, `host_path`, `base_dir`, `ref`, and
+`generation`; `host_path` and `base_dir` can be absent when not applicable.
+
+A successful result must contain `project(width)`, returning a list of virtual
+lines. Each line is a list of chunks shaped like { "text", "highlight_group" },
+for example { { { "ready", "Normal" } } }. `width` is in display cells and may
+be ignored when unused. Top-level results may be projected again after a
+resize. Keep the rendered data needed by the projection in its result closure.
+Optional `dependencies` is a list of non-empty filesystem path strings.
+Loaded-buffer edits, writes, and FileChangedShellPost events for these paths
+refresh affected embeds; there is no continuous filesystem watcher.
+
+Example for a small file embedded as ![[status.txt]]: >
+  local unregister = require("obsidian-embed").register_provider({
+    name = "status-file",
+    match = function(ref) return ref.target == "status.txt" end,
+    render_async = function(ref, ctx, done)
+      local path = vim.fs.joinpath(ctx.workspace_root, ref.target)
+      local cancelled = false
+      vim.schedule(function()
+        if cancelled then return end
+        local lines = vim.fn.getbufline(path, 1)
+        if #lines == 0 then
+          local ok, disk_lines = pcall(vim.fn.readfile, path)
+          if not ok then done(nil, tostring(disk_lines)); return end
+          lines = disk_lines
+        end
+        local first_line = lines[1] or ""
+        done({
+          dependencies = { path },
+          project = function(_width)
+            return { { { first_line, "Normal" } } }
+          end,
+        })
+      end)
+      return function() cancelled = true end
+    end,
+  })
+
+  -- Call unregister() when removing or reloading this provider.
+<
+
+The example defers a small synchronous read. Use nonblocking I/O for larger
+work. Calling unregister() removes the provider; it does not cancel work
+already running, so stop that work in your integration before unregistering.
 
 vim:tw=78:ts=8:noet:ft=help:norl:
