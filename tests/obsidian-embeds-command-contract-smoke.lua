@@ -4,6 +4,18 @@
 local test = dofile(vim.fs.joinpath(vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":h"), "testlib.lua"))
 test.setup_runtime()
 
+-- The minimum-version error must precede plugin setup and name the remedy.
+local embeds = require("obsidian-embed")
+local original_has = vim.fn.has
+vim.fn.has = function(feature)
+  if feature == "nvim-0.11" then return 0 end
+  return original_has(feature)
+end
+local supported, version_error = pcall(embeds.setup)
+vim.fn.has = original_has
+test.assert_true(not supported and tostring(version_error):find("requires Neovim 0.11 or newer", 1, true),
+  "setup should reject unsupported Neovim before configuring the plugin")
+
 local root = vim.fn.tempname()
 vim.fn.mkdir(root, "p")
 vim.fn.mkdir(root .. "/.obsidian", "p")
@@ -42,7 +54,6 @@ vim.cmd.edit(root .. "/Main.md")
 local bufnr = vim.api.nvim_get_current_buf()
 vim.b[bufnr].obsidian_buffer = true
 
-local embeds = require("obsidian-embed")
 embeds.setup()
 test.wait_complete(embeds, bufnr)
 

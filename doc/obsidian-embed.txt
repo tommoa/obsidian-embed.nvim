@@ -12,6 +12,7 @@ Providers    |obsidian-embed-providers|
 INTRODUCTION                                            *obsidian-embed-introduction*
 
 obsidian-embed.nvim renders note embeds in buffers managed by obsidian.nvim.
+It requires Neovim 0.11 or newer.
 It requires obsidian.nvim to be configured before |obsidian-embed-setup|.
 
 In Markdown pipe tables, each embed shows a single-line preview within the

@@ -18,6 +18,10 @@ end
 ---Install the runtime and automatically attach eligible Obsidian buffers.
 ---@param opts? table
 function M.setup(opts)
+  -- The presenter uses nvim__ns_set to keep buffer extmarks window-local.
+  if vim.fn.has("nvim-0.11") == 0 then
+    error("obsidian-embed.nvim requires Neovim 0.11 or newer", 2)
+  end
   require("obsidian-embed.config").setup(opts)
   register_command()
   manager.setup()
