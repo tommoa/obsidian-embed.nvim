@@ -536,6 +536,17 @@ function M.attach(bufnr)
           end
         end
       end
+      -- Table overlays must recheck live source before the debounced analysis.
+      -- Only edits touching a table, or edits shifting its row, need a redraw.
+      for _, committed in pairs(session and session.committed_rows or {}) do
+        if committed.host and committed.host.kind == "table"
+            and committed.row >= first_line
+            and (last_line ~= new_last_line or committed.row < last_line)
+        then
+          presenter.request_redraw(bufnr)
+          break
+        end
+      end
       schedule_refresh(bufnr, force_render)
     end,
     on_reload = function(_, buffer)

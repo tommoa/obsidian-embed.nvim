@@ -75,6 +75,7 @@ local M = {} -- Adapter-only render contexts; never stored in canonical state.
 
 ---@class ObsidianEmbedsRenderBlock
 ---@field ref ObsidianEmbedsRef
+---@field source_token? string Table-cell source bytes used to reject stale overlays after edits.
 ---@field lines? ObsidianEmbedsVirtLine[]
 ---@field project? fun(width: integer): ObsidianEmbedsVirtLine[]
 ---@field line_count? integer Pre-projection scheduler count; each provider reserves one line.

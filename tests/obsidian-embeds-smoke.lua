@@ -154,6 +154,10 @@ write_file(root .. "/Main.md", {
   "- Intro ![[PlainAlias]]",
   "After ordered embeds",
   "",
+  "| Note | Status |",
+  "| --- | --- |",
+  "| ![[PlainAlias]] | ready |",
+  "",
   "Local block text ^local",
   "![[#^local]]",
 })
@@ -302,6 +306,7 @@ local nested_list_embed_row
 local task_embed_row
 local quote_embed_row
 local mixed_list_embed_row
+local table_embed_row
 local local_block_definition_row
 
 for row, line in ipairs(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)) do
@@ -347,6 +352,8 @@ for row, line in ipairs(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)) do
     mixed_list_embed_row = row - 1
   elseif line == "After ordered embeds" then
     ordered_anchor_row = row - 1
+  elseif line == "| ![[PlainAlias]] | ready |" then
+    table_embed_row = row - 1
   elseif line == "![[#^local]]" then
     local_block_row = row - 1
   elseif line == "Local block text ^local" then
@@ -636,6 +643,49 @@ assert_contains(
   "    │ Plain body remains",
   "nested list embed continuations should preserve indentation"
 )
+assert_true(
+  (overlay_text_on_row(marks, table_embed_row) or ""):find("Plain first", 1, true) ~= nil,
+  "table embed should render a compact preview on its source row"
+)
+assert_true(
+  source_render_text(marks, table_embed_row) == "" and not has_conceal_on_row(marks, table_embed_row),
+  "table embed should leave the row and other cells in place"
+)
+-- Source edits clear installed table overlays before the debounced generation
+-- settles, even if the next character arrives and resets that debounce.
+local presenter = require("obsidian-embed.presenter")
+presenter.request_redraw(bufnr)
+local table_namespace = vim.api.nvim_get_namespaces()["obsidian-embed.window." .. vim.api.nvim_get_current_win()]
+local function installed_table_preview()
+  if not table_namespace then return nil end
+  for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(bufnr, table_namespace, { table_embed_row, 0 }, { table_embed_row + 1, 0 }, { details = true })) do
+    if mark[4].virt_text then return mark end
+  end
+end
+assert_true(vim.wait(1000, function() return installed_table_preview() ~= nil end, 10), "table preview should be installed")
+local source_before_edit = vim.api.nvim_buf_get_lines(bufnr, table_embed_row, table_embed_row + 1, false)[1]
+local generation_before_edit = embeds.inspect(bufnr).generation
+local policy = require("obsidian-embed.policy")
+local previous_debounce = policy.debounce_ms
+policy.debounce_ms = 250
+local redraw_calls, original_request_redraw = 0, presenter.request_redraw
+presenter.request_redraw = function(...)
+  redraw_calls = redraw_calls + 1
+  return original_request_redraw(...)
+end
+local unrelated_row = ordered_anchor_row
+local unrelated_line = vim.api.nvim_buf_get_lines(bufnr, unrelated_row, unrelated_row + 1, false)[1]
+vim.api.nvim_buf_set_lines(bufnr, unrelated_row, unrelated_row + 1, false, { unrelated_line .. " edited" })
+assert_true(redraw_calls == 0, "same-line edit above a table should wait for debounced refresh")
+vim.api.nvim_buf_set_lines(bufnr, unrelated_row, unrelated_row + 1, false, { unrelated_line })
+vim.api.nvim_buf_set_lines(bufnr, table_embed_row, table_embed_row + 1, false, { "| ![[New]] | ready |" })
+assert_true(redraw_calls > 0, "editing a table row should request prompt presentation sync")
+presenter.request_redraw = original_request_redraw
+assert_true(vim.wait(100, function() return installed_table_preview() == nil end, 5), "source edit should clear stale table overlay promptly")
+assert_true(embeds.inspect(bufnr).generation == generation_before_edit, "overlay should clear before source refresh")
+vim.api.nvim_buf_set_lines(bufnr, table_embed_row, table_embed_row + 1, false, { source_before_edit })
+policy.debounce_ms = previous_debounce
+testlib.wait_refresh(embeds, bufnr, generation_before_edit)
 assert_true(
   overlay_text_on_row(marks, task_embed_row) == "│ Plain first line",
   "task embed should replace only the token after its checkbox"

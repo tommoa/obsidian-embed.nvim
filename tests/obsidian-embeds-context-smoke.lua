@@ -178,8 +178,98 @@ test.assert_true(
 )
 test.assert_true(
   host_analysis.rows[10].host.kind == "table" and not host_analysis.rows[10].host.exact,
-  "table embeds should retain the current fallback pending compact cell presentation"
+  "table embeds should use compact cell presentation"
 )
+
+-- A table preview must occupy exactly the token's display cells, including
+-- when multiple embeds share a row, or the following pipes appear to move.
+local table_lines = { "| First | Second |", "| --- | --- |", "| ![[First]] | ![[Second]] |" }
+local table_analysis = analyzer.analyze(table_lines)
+test.assert_true(table_analysis.error == nil, "table analysis should parse fixture")
+local table_buf = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_lines(table_buf, 0, -1, false, table_lines)
+vim.api.nvim_win_set_buf(winid, table_buf)
+local table_refs = {}
+for _, ref in ipairs(table_analysis.rows[3].refs) do
+  table_refs[#table_refs + 1] = { range = { start_col = ref.start_col, end_col = ref.end_col } }
+end
+test.assert_true(#table_refs == 2, "both table-cell embeds should be analyzed")
+local function token_for(ref)
+  return table_lines[3]:sub(ref.range.start_col + 1, ref.range.end_col)
+end
+local provider_width
+local table_state = {
+  rows = {
+    [2] = {
+      host = table_analysis.rows[3].host,
+      exact = false,
+      refs = table_refs,
+      blocks = {
+        { ref = table_refs[1], source_token = token_for(table_refs[1]), lines = { { { "", "Normal" } }, { { "A long first preview", "Normal" } } } },
+        { ref = table_refs[2], source_token = token_for(table_refs[2]), project = function(width)
+          provider_width = width
+          return require("obsidian-embed.highlight").with_rail(
+            { { { "第二 | cell", "Normal" } } }, config.get()
+          )
+        end },
+      },
+    },
+  },
+}
+config.setup({ presentation = { source = "conceal" } })
+local table_marks = presenter.project(table_state, winid)
+local previews = {}
+for _, projected in ipairs(table_marks) do
+  local details = projected[4]
+  test.assert_true(not details.virt_lines and details.conceal == nil, "table previews must not add rows or collapse cells")
+  test.assert_true(details.virt_text_pos == "overlay", "table previews should overlay their source tokens")
+  previews[projected[3]] = details.virt_text[1][1]
+end
+test.assert_true(#table_marks == 2, "each table embed should have one preview")
+for _, ref in ipairs(table_refs) do
+  test.assert_true(
+    vim.fn.strdisplaywidth(previews[ref.range.start_col]) == vim.fn.strdisplaywidth(token_for(ref)),
+    "table preview should preserve the token's display width"
+  )
+end
+test.assert_true(previews[table_refs[1].range.start_col]:find("…", 1, true) ~= nil, "long previews should be marked as truncated")
+test.assert_true(previews[table_refs[2].range.start_col]:find("¦", 1, true) ~= nil, "preview pipes should not look like cell separators")
+test.assert_true(previews[table_refs[2].range.start_col]:find("│", 1, true) == nil, "compact table previews should omit the editorial rail")
+test.assert_true(provider_width == vim.fn.strdisplaywidth("![[Second]]"), "providers should receive the cell preview width")
+vim.api.nvim_buf_set_lines(table_buf, 2, 3, false, { "| ![[New]] | ![[Second]] |" })
+local stale_marks = presenter.project(table_state, winid)
+test.assert_true(#stale_marks == 0, "old previews should not cover table cells after a source edit")
+vim.api.nvim_buf_set_lines(table_buf, 2, 3, false, { table_lines[3] })
+config.setup({ presentation = { source = "show" } })
+test.assert_true(#presenter.project(table_state, winid) == 0, "show mode should keep table source visible")
+config.setup({ presentation = { source = "reveal_cursor" } })
+vim.api.nvim_win_set_cursor(winid, { 3, 0 })
+test.assert_true(#presenter.project(table_state, winid) == 0, "cursor row should reveal table source")
+vim.api.nvim_win_set_cursor(winid, { 1, 0 })
+test.assert_true(#presenter.project(table_state, winid) == 2, "off-cursor table cells should show previews")
+local tabbed_line = "| ![[A\tB]] | tail |"
+vim.api.nvim_buf_set_lines(table_buf, 2, 3, false, { tabbed_line })
+local tabbed_analysis = analyzer.analyze({ table_lines[1], table_lines[2], tabbed_line })
+test.assert_true(tabbed_analysis.rows[3].host.kind == "table" and #tabbed_analysis.rows[3].refs == 1, "tabbed token should remain a table embed")
+local tabbed_ref = tabbed_analysis.rows[3].refs[1]
+local tabbed_token = tabbed_line:sub(tabbed_ref.start_col + 1, tabbed_ref.end_col)
+local tabbed_state = {
+  rows = { [2] = {
+    host = tabbed_analysis.rows[3].host,
+    blocks = { { ref = { range = { start_col = tabbed_ref.start_col, end_col = tabbed_ref.end_col } },
+      source_token = tabbed_token, lines = { { { "short", "Normal" } } } } },
+  } },
+}
+local tabbed_marks = presenter.project(tabbed_state, winid)
+local tabbed_start_width = vim.fn.strdisplaywidth(tabbed_line:sub(1, tabbed_ref.start_col))
+test.assert_true(#tabbed_marks == 1, "tabbed table embed should show one preview")
+test.assert_true(
+  vim.fn.strdisplaywidth(tabbed_marks[1][4].virt_text[1][1]) == vim.fn.strdisplaywidth(tabbed_token, tabbed_start_width),
+  "tabbed token preview should fit its width at the cell's actual display column"
+)
+config.setup({})
+vim.api.nvim_win_set_buf(winid, previous_buf)
+vim.api.nvim_buf_delete(table_buf, { force = true })
 
 local function has_group(row, group)
   for _, chunk in ipairs(analysis.rows[row].chunks) do

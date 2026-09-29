@@ -224,24 +224,53 @@ local function can_replace_source(row_state)
     and block_has_output(row_state.blocks[1])
 end
 
+local function block_lines(block, available)
+  if not block.project then return block.lines end
+  local ok, projected = pcall(block.project, available)
+  if ok and type(projected) == "table" then return projected end
+  return { { { "Embed provider error: " .. tostring(projected), opts().presentation.highlights.warning } } }
+end
+
 local function rendered_lines(row_state, winid)
   local lines = {}
   local host = row_state.host or { continuation = "" }
   local available = math.max(1, text_width(winid) - vim.fn.strdisplaywidth(opts().presentation.rail)
     - vim.fn.strdisplaywidth(host.continuation or ""))
   for _, block in ipairs(row_state.blocks or {}) do
-    if block.project then
-      local ok, projected = pcall(block.project, available)
-      if ok and type(projected) == "table" then
-        append_lines(lines, projected)
-      else
-        lines[#lines + 1] = { { "Embed provider error: " .. tostring(projected), opts().presentation.highlights.warning } }
-      end
-    else
-      append_lines(lines, block.lines)
-    end
+    append_lines(lines, block_lines(block, available))
   end
   return lines
+end
+
+---Fit one rendered line over the source token without moving later table cells.
+local function table_preview(block, width)
+  local content, group
+  for _, line in ipairs(block_lines(block, width) or {}) do
+    local parts = {}
+    for _, chunk in ipairs(line) do parts[#parts + 1] = chunk[1] end
+    local candidate = vim.trim(table.concat(parts, "")):gsub("%s+", " "):gsub("|", "¦")
+    if candidate ~= "" then
+      content, group = candidate, line[1] and line[1][2]
+      break
+    end
+  end
+  if not content then return nil end
+
+  local used, chars = 0, {}
+  for _, char in ipairs(vim.fn.split(content, "\\zs")) do
+    local char_width = display_width(char, used)
+    if used + char_width > width then break end
+    chars[#chars + 1], used = char, used + char_width
+  end
+  if used < display_width(content, 0) then
+    -- Reserve one display cell for the truncation marker.
+    while used > width - 1 do
+      local removed = table.remove(chars)
+      used = used - display_width(removed, used - 1)
+    end
+    chars[#chars + 1], used = "…", used + 1
+  end
+  return { { table.concat(chars) .. string.rep(" ", width - used), group or opts().presentation.highlights.text } }
 end
 
 local function mark(row, col, details)
@@ -268,52 +297,72 @@ function M.project(state, winid)
   for _, row in ipairs(rows) do
     local row_state = state.rows[row]
     local source_hidden = hidden(row, local_cursor)
-    local replaced = source_hidden and can_replace_source(row_state)
-    if source_hidden then
-      for _, block in ipairs(row_state.blocks or {}) do
-        if block_has_output(block) then
+    if row_state.host and row_state.host.kind == "table" then
+      if source_hidden then
+        local source = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(winid), row, row + 1, false)[1] or ""
+        for _, block in ipairs(row_state.blocks or {}) do
           local ref = block.ref
-          marks[#marks + 1] = mark(row, ref.range.start_col, {
-            end_row = row, end_col = ref.range.end_col, conceal = "",
-          })
+          local token = source:sub(ref.range.start_col + 1, ref.range.end_col)
+          local start_width = vim.fn.strdisplaywidth(source:sub(1, ref.range.start_col))
+          local token_width = vim.fn.strdisplaywidth(token, start_width)
+          local preview = token == block.source_token and table_preview(block, token_width)
+          if preview then
+            -- Overlay preserves the byte positions and display width of pipes and later cells.
+            marks[#marks + 1] = mark(row, ref.range.start_col, {
+              virt_text = preview,
+              virt_text_pos = "overlay",
+            })
+          end
         end
       end
-    end
+    else
+      local replaced = source_hidden and can_replace_source(row_state)
+      if source_hidden then
+        for _, block in ipairs(row_state.blocks or {}) do
+          if block_has_output(block) then
+            local ref = block.ref
+            marks[#marks + 1] = mark(row, ref.range.start_col, {
+              end_row = row, end_col = ref.range.end_col, conceal = "",
+            })
+          end
+        end
+      end
 
-    local lines = rendered_lines(row_state, winid)
-    if #lines > 0 then
-      local host = row_state.host or { prefix = "", continuation = "" }
-      local continuation = host.continuation or ""
-      local first
-      local projected_lines = {}
-      if replaced then
-        first, projected_lines = replacement_lines(winid, lines[1], host)
-      end
-      local first_index = replaced and 2 or 1
-      if first then
-        marks[#marks + 1] = mark(row, row_state.refs[1].range.start_col, {
-          virt_text = plain_lines({ first })[1],
-          -- The presenter has already wrapped this replacement and projects
-          -- continuations as virtual lines. Inline virtual text participates
-          -- in Neovim's wrapping a second time, leaving a blank screen row
-          -- when the concealed source is hosted by a list item.
-          virt_text_pos = "overlay",
-        })
-      end
-      local remaining = {}
-      for index = first_index, #lines do
-        remaining[#remaining + 1] = lines[index]
-      end
-      if #remaining > 0 then
-        local displayed = display_lines(winid, host_lines(remaining, continuation))
-        append_lines(projected_lines, displayed)
-      end
-      if #projected_lines > 0 then
-        marks[#marks + 1] = mark(row, 0, {
-          virt_lines = plain_lines(projected_lines),
-          virt_lines_overflow = opts().presentation.nowrap_overflow,
-          virt_lines_leftcol = opts().virt_lines_leftcol,
-        })
+      local lines = rendered_lines(row_state, winid)
+      if #lines > 0 then
+        local host = row_state.host or { prefix = "", continuation = "" }
+        local continuation = host.continuation or ""
+        local first
+        local projected_lines = {}
+        if replaced then
+          first, projected_lines = replacement_lines(winid, lines[1], host)
+        end
+        local first_index = replaced and 2 or 1
+        if first then
+          marks[#marks + 1] = mark(row, row_state.refs[1].range.start_col, {
+            virt_text = plain_lines({ first })[1],
+            -- The presenter has already wrapped this replacement and projects
+            -- continuations as virtual lines. Inline virtual text participates
+            -- in Neovim's wrapping a second time, leaving a blank screen row
+            -- when the concealed source is hosted by a list item.
+            virt_text_pos = "overlay",
+          })
+        end
+        local remaining = {}
+        for index = first_index, #lines do
+          remaining[#remaining + 1] = lines[index]
+        end
+        if #remaining > 0 then
+          local displayed = display_lines(winid, host_lines(remaining, continuation))
+          append_lines(projected_lines, displayed)
+        end
+        if #projected_lines > 0 then
+          marks[#marks + 1] = mark(row, 0, {
+            virt_lines = plain_lines(projected_lines),
+            virt_lines_overflow = opts().presentation.nowrap_overflow,
+            virt_lines_leftcol = opts().virt_lines_leftcol,
+          })
+        end
       end
     end
   end

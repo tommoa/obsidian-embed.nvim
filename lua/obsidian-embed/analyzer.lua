@@ -236,7 +236,7 @@ local function covered(col, spans)
 end
 
 local function host_layout(line, refs, row, structure)
-  -- TODO: derive a compact constrained presentation for embeds in pipe-table cells.
+  -- Table cells keep their source width; the presenter overlays a bounded preview.
   if structure.table_rows[row] then
     return { kind = "table", prefix = "", continuation = "", exact = false }
   end

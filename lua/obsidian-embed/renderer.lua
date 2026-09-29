@@ -341,12 +341,17 @@ function M.render_analyzed_row_state_async(api, buffer_state, row, analyzed_row,
     end
     index = index + 1
     local ref = analyzer.to_upstream_ref(normalized_ref)
+    -- Keep table tokens with committed blocks: a debounced source edit can
+    -- redraw the old row before its replacement generation is ready.
+    local source_token = analyzed_row.host.kind == "table"
+      and buffer_state.source_lines[row + 1]:sub(ref.range.start_col + 1, ref.range.end_col)
     -- Accumulate one ref result before advancing to the next source ref.
     local handled = provider_render_async(ref, ctx, function(result, provider_err)
       if provider_err then done(nil, provider_err); return end
       rendered_refs[#rendered_refs + 1] = ref
       blocks[#blocks + 1] = {
         ref = ref,
+        source_token = source_token,
         project = function(width)
           return highlight.with_rail(project_provider(result, width, ctx.depth), opts())
         end,
@@ -358,9 +363,11 @@ function M.render_analyzed_row_state_async(api, buffer_state, row, analyzed_row,
     api.safe_render_ref_async(ref, ctx, function(rendered, line_count)
       rendered_refs[#rendered_refs + 1] = ref
       if type(rendered) == "function" then
-        blocks[#blocks + 1] = { ref = ref, project = rendered, line_count = line_count }
+        blocks[#blocks + 1] = {
+          ref = ref, source_token = source_token, project = rendered, line_count = line_count,
+        }
       else
-        blocks[#blocks + 1] = { ref = ref, lines = rendered or {} }
+        blocks[#blocks + 1] = { ref = ref, source_token = source_token, lines = rendered or {} }
       end
       queue_continuation(ctx, "row_ref_ready", render_next)
     end)
