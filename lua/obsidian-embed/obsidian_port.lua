@@ -15,7 +15,9 @@ function M.assert_available()
   assert_function("obsidian.note.from_buffer", require("obsidian.note").from_buffer)
   assert_function("obsidian.note.from_lines", require("obsidian.note").from_lines)
   assert_function("obsidian.attachment.is_attachment_path", require("obsidian.attachment").is_attachment_path)
-  assert_function("obsidian.util.is_uri", require("obsidian.util").is_uri)
+  assert_function("obsidian.uri.is_uri", require("obsidian.uri").is_uri)
+  assert_function("obsidian.parse.block_id.normalize", require("obsidian.parse.block_id").normalize)
+  assert_function("obsidian.parse.header.normalize_anchor", require("obsidian.parse.header").normalize_anchor)
   assert_function("obsidian.api.find_workspace", require("obsidian.api").find_workspace)
   assert_function("obsidian.config.normalize", require("obsidian.config").normalize)
 end
@@ -25,15 +27,15 @@ function M.is_attachment_path(target)
 end
 
 function M.is_uri(target)
-  return require("obsidian.util").is_uri(target)
+  return require("obsidian.uri").is_uri(target)
 end
 
 function M.standardize_block(block)
-  return require("obsidian.util").standardize_block(block)
+  return require("obsidian.parse.block_id").normalize(block)
 end
 
 function M.standardize_anchor(anchor)
-  return require("obsidian.util").standardize_anchor(anchor)
+  return require("obsidian.parse.header").normalize_anchor(anchor)
 end
 
 function M.workspace(root, required)
@@ -73,10 +75,14 @@ local function search_options(root, overrides)
   return vim.tbl_extend("force", result, overrides or {})
 end
 
+---Expose the same cancellation contract for text search and file discovery.
+---@return fun() cancel
 function M.search_async(root, target, overrides, on_match, on_exit)
-  return require("obsidian.search").search_async(root, target, search_options(root, overrides), on_match, on_exit)
+  local handle = require("obsidian.search").search_async(root, target, search_options(root, overrides), on_match, on_exit)
+  return function() handle:kill(15) end
 end
 
+---@return fun() cancel
 function M.find_async(root, target, overrides, on_match, on_exit)
   return require("obsidian.search").find_async(root, target, search_options(root, overrides), on_match, on_exit)
 end

@@ -23,7 +23,7 @@ package.loaded["obsidian.search"] = {
     local run = assert(exits[target], "find should follow search for " .. target)
     run.find = on_exit
     run.find_match = on_match
-    return { kill = function() killed = killed + 1 end }
+    return function() killed = killed + 1 end
   end,
 }
 
@@ -57,7 +57,7 @@ resolver.resolve_notes_async({ target = "Shared" }, context(90, "/vault/shared")
 resolver.resolve_notes_async({ target = "Shared" }, context(91, "/vault/shared"), function() end)
 test.assert_true(vim.wait(1000, function() return exits.Shared ~= nil end, 10), "equivalent requests should share one search")
 test.assert_true(resolver.cancel_waiters(io, 90, 1) == 1 and killed == 0, "one waiter should keep shared work alive")
-test.assert_true(resolver.cancel_waiters(io, 91, 1) == 1 and killed == 2, "the last waiter should cancel shared handles")
+test.assert_true(resolver.cancel_waiters(io, 91, 1) == 1 and killed == 2, "the last waiter should cancel both search and discovery")
 
 local old_completed = 0
 resolver.resolve_notes_async({ target = "Reset" }, context(92, "/vault/reset", 0), function() old_completed = old_completed + 1 end)

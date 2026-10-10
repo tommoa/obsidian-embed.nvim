@@ -32,9 +32,6 @@ require("obsidian").setup {
       path = vault_b,
     },
   },
-  picker = {
-    name = false,
-  },
   ui = {
     enable = false,
   },

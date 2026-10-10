@@ -68,9 +68,6 @@ require("obsidian").setup {
       path = cross_workspace,
     },
   },
-  picker = {
-    name = false,
-  },
   ui = {
     enable = false,
   },

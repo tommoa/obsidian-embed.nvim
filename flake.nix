@@ -27,8 +27,8 @@
           obsidian-nvim = pkgs.fetchFromGitHub {
             owner = "obsidian-nvim";
             repo = "obsidian.nvim";
-            rev = "4bf07e502c4e35425a0bfc3438232a10971c1355";
-            hash = "sha256-jSaAT7DCGsgzNJCd+ey3My2zqQ7kDcRm5ALDTOJKmJM=";
+            rev = "1212014bb22a1f44a655e8e706659892b8e43e59"; # v3.16.8
+            hash = "sha256-VQBopv4Lwjie5KyGD/n16V5fKmfn/PPRNBhoQ9E8/vI=";
           };
           plenary-nvim = pkgs.fetchFromGitHub {
             owner = "nvim-lua";

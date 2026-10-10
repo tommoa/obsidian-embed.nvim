@@ -84,8 +84,8 @@ function M.cancel_waiters(runtime, bufnr, generation)
     if #retained == 0 and request.stage ~= "ready" then
       request.cancelled = true
       stores[key] = nil
-      for _, handle in ipairs(request.handles or {}) do
-        if handle and type(handle.kill) == "function" then pcall(handle.kill, handle, 15) end
+      for _, cancel in ipairs(request.cancellations or {}) do
+        pcall(cancel)
       end
       if request.admitted then release(runtime, request) end
     end
@@ -400,7 +400,7 @@ function M.resolve_notes_async(ref, ctx, done)
   end
 
   request = {
-    stage = "running", waiters = { { ctx = ctx, done = done } }, handles = {},
+    stage = "running", waiters = { { ctx = ctx, done = done } }, cancellations = {},
     last_used_ns = vim.uv.hrtime(),
   }
   requests[request_key] = request
@@ -519,10 +519,10 @@ function M.resolve_notes_async(ref, ctx, done)
       end)
     end
     local ok, err = pcall(function()
-      request.handles[#request.handles + 1] = obsidian_port.search_async(root, target, { fixed_strings = true, ignore_case = true, max_count_per_file = 1 }, function(match)
+      request.cancellations[#request.cancellations + 1] = obsidian_port.search_async(root, target, { fixed_strings = true, ignore_case = true, max_count_per_file = 1 }, function(match)
         found(match.path.text)
       end, exited)
-      request.handles[#request.handles + 1] = obsidian_port.find_async(root, target, { ignore_case = true }, found, exited)
+      request.cancellations[#request.cancellations + 1] = obsidian_port.find_async(root, target, { ignore_case = true }, found, exited)
     end)
     if not ok then
       finish({}, tostring(err))

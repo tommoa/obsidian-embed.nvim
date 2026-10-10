@@ -23,7 +23,9 @@ function M.embed_refs(line)
 
   local parse_refs = require("obsidian.parse.refs")
   local refs = {}
-  for _, ref in ipairs(parse_refs.extract(line)) do
+  -- The analyzer owns full-document exclusions. Standalone line filtering
+  -- would mistake indented list continuations for code blocks.
+  for _, ref in ipairs(parse_refs.extract(line, { lexical = true })) do
     if ref.embed and ref.kind ~= "footnote" then
       refs[#refs + 1] = ref
     end

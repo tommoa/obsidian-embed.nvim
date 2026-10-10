@@ -5,7 +5,7 @@ Render Obsidian note embeds inline in Neovim.
 ## Requirements
 
 - Neovim 0.11 or newer
-- [obsidian.nvim](https://github.com/obsidian-nvim/obsidian.nvim)
+- [obsidian.nvim](https://github.com/obsidian-nvim/obsidian.nvim) v3.16.8 or newer
 - Markdown and Markdown Inline Tree-sitter parsers
 
 ## Installation

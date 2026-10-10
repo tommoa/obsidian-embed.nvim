@@ -25,9 +25,6 @@ require("obsidian").setup {
       path = root,
     },
   },
-  picker = {
-    name = false,
-  },
   ui = {
     enable = false,
   },
