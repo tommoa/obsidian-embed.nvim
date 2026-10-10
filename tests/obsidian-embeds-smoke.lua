@@ -729,6 +729,55 @@ assert_contains(
 assert_contains(ignored_nested_text, "mixed  and ![[image.png]] tail", "note rendering should preserve adjacent attachments")
 assert_contains(ignored_nested_text, "rendered ignored-child body", "note refs beside attachments should still render")
 
+-- Providers must never see URI or attachment refs, even when their matcher
+-- would claim them. Exercise both row dispatch and recursive note rendering.
+do
+  local matched, provider_renders = {}, {}
+  local ignored_targets = { ["image.png"] = true, ["https://example.com/image.png"] = true }
+  local unregister = embeds.register_provider({
+    name = "smoke_ignored_refs",
+    match = function(ref)
+      matched[ref.target] = true
+      return ignored_targets[ref.target] or ref.target == "Allowed.provider" or ref.target == "IgnoredChild"
+    end,
+    render_async = function(ref, _, done)
+      provider_renders[ref.target] = true
+      done({ project = function()
+        return { { { "provider body: " .. ref.target, "Normal" } } }
+      end })
+    end,
+  })
+  write_file(root .. "/MainIgnoredProviders.md", {
+    "![[image.png]]",
+    "![[https://example.com/image.png]]",
+    "mixed ![[Allowed.provider]] and ![[image.png]] tail",
+    "![[IgnoredNested]]",
+  })
+  vim.cmd.edit(root .. "/MainIgnoredProviders.md")
+  local provider_bufnr = vim.api.nvim_get_current_buf()
+  vim.b[provider_bufnr].obsidian_buffer = true
+  embeds.setup()
+  testlib.wait_complete(embeds, provider_bufnr)
+  local provider_marks = marks_with_cursor_on_buf(provider_bufnr, 2)
+  for target in pairs(ignored_targets) do
+    assert_true(not matched[target], "ignored ref should be excluded before provider matching: " .. target)
+  end
+  assert_true(provider_renders["Allowed.provider"], "eligible top-level refs should still reach providers")
+  assert_true(provider_renders.IgnoredChild, "eligible nested refs should still reach providers")
+  for row = 0, 1 do
+    assert_true(not has_conceal_on_row(provider_marks, row), "ignored source should remain visible to the user")
+    assert_true(source_render_text(provider_marks, row) == "", "ignored refs should not produce provider blocks")
+  end
+  assert_contains(source_render_text(provider_marks, 2), "provider body: Allowed.provider",
+    "top-level providers should render beside ignored attachments")
+  local nested_text = source_render_text(provider_marks, 3)
+  assert_contains(nested_text, "![[image.png]]", "nested attachment source should remain literal with providers registered")
+  assert_contains(nested_text, "![[https://example.com/image.png]]",
+    "nested URI source should remain literal with providers registered")
+  assert_contains(nested_text, "provider body: IgnoredChild", "nested providers should render beside ignored attachments")
+  unregister()
+end
+
 -- Scenario: an empty note remains editable instead of disappearing without a replacement.
 assert_true(not has_conceal_on_row(marks, empty_row), "empty embed source should remain visible")
 assert_true(overlay_text_on_row(marks, empty_row) == nil, "empty embeds should not create inline replacement text")

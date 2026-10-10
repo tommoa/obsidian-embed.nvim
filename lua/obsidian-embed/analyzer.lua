@@ -309,6 +309,8 @@ local function project_rows(lines, spans, excluded, structure, parse_refs)
           row = row, start_col = ref.start_col, end_col = ref.end_col,
           group = "@markup.link", priority = highlight.capture_priority("@markup.link"),
         }
+        -- Only eligible refs enter the shared row model, so neither top-level
+        -- nor nested provider dispatch sees URI or attachment embeds.
         if parser.is_note_embed(upstream_ref) then refs[#refs + 1] = ref end
       end
     end
