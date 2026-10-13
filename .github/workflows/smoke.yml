@@ -1,0 +1,50 @@
+name: Smoke compatibility
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 3 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Neovim ${{ matrix.neovim }} / Obsidian ${{ matrix.obsidian }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        neovim: [v0.11.0, stable]
+        obsidian: [minimum, stable]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - name: Prepare pinned dependencies and resolve stable releases
+        env:
+          NEOVIM_VERSION: ${{ matrix.neovim }}
+          OBSIDIAN_VERSION: ${{ matrix.obsidian }}
+        run: |
+          python3 scripts/prepare-tests.py "$RUNNER_TEMP/test-deps" \
+            --neovim "$NEOVIM_VERSION" --obsidian "$OBSIDIAN_VERSION"
+      - name: Run boundary checks and every standalone smoke test
+        run: |
+          . "$RUNNER_TEMP/test-deps/env.sh"
+          ./scripts/test.sh
+      - name: Record resolved versions
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/test-deps/versions.json" ]; then
+            cat "$RUNNER_TEMP/test-deps/versions.json"
+            printf '\n```json\n' >> "$GITHUB_STEP_SUMMARY"
+            cat "$RUNNER_TEMP/test-deps/versions.json" >> "$GITHUB_STEP_SUMMARY"
+            printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"
+          fi

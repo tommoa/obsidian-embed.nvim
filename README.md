@@ -321,5 +321,45 @@ dependency licenses.
 
 ## Development
 
-Run the Nix smoke checks with `nix flake check`. The tests are standalone and
-do not read the user's Neovim configuration.
+Run the Nix smoke checks with `nix flake check`. Nix and CI use the same
+`scripts/test.sh` runner, which discovers `tests/*-smoke.lua`, checks the
+architecture boundaries, and runs each test in a separate headless Neovim
+process with `-u NONE -i NONE` and temporary HOME/XDG directories.
+
+To prepare the same dependencies without Nix on Linux or macOS (x86_64 or
+arm64), install Python 3.9+, curl, tar, and ripgrep, then run:
+
+```sh
+python3 scripts/prepare-tests.py /tmp/obsidian-embed-deps \
+  --neovim v0.11.0 --obsidian minimum
+. /tmp/obsidian-embed-deps/env.sh
+./scripts/test.sh
+```
+
+The destination must be a new directory; existing directories are never
+overwritten. If preparation fails or you interrupt it with Ctrl-C, the
+preparer removes its partial destination so you can retry the same command.
+Use `--neovim stable` and `--obsidian stable` to test the latest
+non-prerelease GitHub releases, or
+specify a Neovim release tag and an Obsidian commit/tag to reproduce a run.
+The preparer verifies the Neovim archive checksum and records resolved tags,
+source commits, and archive hashes in `versions.json`. Plenary is pinned to
+the same revision as Nix. Both Markdown parsers and their highlight queries
+come bundled with the selected Neovim release and are covered by its archive
+checksum; no parser compilation is required.
+
+With existing dependencies, set `OBSIDIAN_EMBEDS_RTP` to absolute,
+colon-separated paths to obsidian.nvim, plenary.nvim, and a runtime containing
+both parsers, then run `./scripts/test.sh`. Set `NVIM_BIN` to choose an executable.
+The runner checks parser/query availability before running the suite and
+does not fall back to plugins from your personal configuration.
+
+CI runs all four combinations of Neovim v0.11.0/latest stable and
+obsidian.nvim v3.16.8/latest stable on Ubuntu, on pushes, pull requests,
+manual dispatch, and weekly. As of 2026-10-13 the stable versions are Neovim
+v0.12.6 and obsidian.nvim v3.16.8, so the two Obsidian lanes currently resolve
+to the same commit. Stable lanes follow new releases automatically; the
+weekly run can expose upstream API changes without a repository commit.
+Failures block their matrix cell, other cells continue, and the job summary
+records exact versions for reproduction. Nix retains its locked dependencies
+and checks on all systems declared in `flake.nix`.
