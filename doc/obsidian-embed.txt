@@ -5,51 +5,291 @@ Contents                                                        *obsidian-embed*
 
 Introduction |obsidian-embed-introduction|
 Setup        |obsidian-embed-setup|
+Parsers      |obsidian-embed-parsers|
+Presentation |obsidian-embed-presentation|
 Commands     |obsidian-embed-commands|
+Examples     |obsidian-embed-examples|
+Lookup       |obsidian-embed-targets|
+Tables       |obsidian-embed-tables|
+Refresh      |obsidian-embed-refresh|
+Troubleshoot |obsidian-embed-troubleshooting|
 Providers    |obsidian-embed-providers|
+Decisions    |obsidian-embed-decisions|
 
 ===============================================================================
-INTRODUCTION                                            *obsidian-embed-introduction*
+INTRODUCTION                                       *obsidian-embed-introduction*
 
 obsidian-embed.nvim renders note embeds in buffers managed by obsidian.nvim.
-It requires Neovim 0.11 or newer.
-It requires obsidian.nvim v3.16.8 or newer to be configured before
-|obsidian-embed-setup|.
+It requires Neovim 0.11+, obsidian.nvim v3.16.8+ configured before embed setup,
+and both markdown and markdown_inline Tree-sitter parsers with compatible
+queries on 'runtimepath'. Workspace search requires ripgrep (rg), along with
+obsidian.nvim's own dependencies.
 
-In Markdown pipe tables, each embed shows a single-line preview within the
-width of its source token. Longer previews end with an ellipsis; any pipes in
-preview text appear as broken bars so they cannot be mistaken for cell
-separators. With `source = "reveal_cursor"`, the raw token is visible on the
-cursor row. With `source = "show"`, table embeds remain as raw tokens.
+Previews change only the display, never the Markdown saved to disk. See the
+repository's doc/demo/ directory for a real Neovim capture and provenance notes.
 
 ===============================================================================
-SETUP                                                          *obsidian-embed-setup*
+SETUP                                                    *obsidian-embed-setup*
 
->
+Configure obsidian.nvim with an existing workspace first: >lua
+  require("obsidian").setup({
+    legacy_commands = false,
+    workspaces = {
+      { name = "notes", path = "~/notes" }, -- your vault
+    },
+  })
   require("obsidian-embed").setup({})
 <
+With lazy.nvim, keep obsidian.nvim's workspace configuration in its own spec
+and declare it as this plugin's dependency: >lua
+  {
+    "tommoa/obsidian-embed.nvim",
+    ft = { "markdown", "obsidian_base" },
+    dependencies = { "obsidian-nvim/obsidian.nvim" },
+    opts = {},
+    config = function(_, opts)
+      require("obsidian-embed").setup(opts)
+    end,
+  }
+<
+Open a named note inside that workspace. Automatic attachment requires
+vim.b.obsidian_buffer == true, set by obsidian.nvim. Merely creating a
+.obsidian directory does not configure a workspace.
 
-The optional `presentation` table accepts:
+PARSERS                                                *obsidian-embed-parsers*
 
-  frontmatter      Render frontmatter. Defaults to false.
-  source           "reveal_cursor", "conceal", or "show".
-  rail             Prefix rendered lines. Defaults to "│ ".
-  highlights.text  Highlight group for rendered text.
-  highlights.rail  Highlight group for the rail.
-  highlights.warning Highlight group for errors and warnings.
-  nowrap_overflow  Currently only "trunc" is supported.
+The plugin does not install parsers. If your distribution does not supply
+both parsers, install nvim-treesitter with lazy = false and build = ":TSUpdate".
+
+For Neovim 0.12+, select nvim-treesitter's main branch and run: >vim
+  :lua require("nvim-treesitter").install({ "markdown", "markdown_inline" })
+<
+This runs asynchronously. Wait for completion before refreshing. Bootstrap
+scripts can append :wait(300000) to the Lua call. Follow upstream's compiler,
+tar, curl, and tree-sitter-cli requirements (currently CLI 0.26.1+ on main).
+The old require("nvim-treesitter.configs") API does not apply to main.
+
+For Neovim 0.11, select nvim-treesitter's frozen master branch and run: >vim
+  :TSInstall markdown markdown_inline
+<
+Follow that branch's compiler/CLI requirements. Keep parsers and queries
+compatible using :TSUpdate. Then run :Obsidian embed refresh.
+
+PRESENTATION                                      *obsidian-embed-presentation*
+
+>lua
+  require("obsidian-embed").setup({
+    presentation = {
+      source = "reveal_cursor",
+      frontmatter = false,
+      rail = "│ ",
+      highlights = {
+        text = "ObsidianEmbedText",
+        rail = "ObsidianEmbedRail",
+        warning = "ObsidianEmbedWarning",
+      },
+      nowrap_overflow = "trunc",
+    },
+  })
+<
+The optional presentation table accepts:
+
+  frontmatter        Render frontmatter. Defaults to false.
+  source             "reveal_cursor" (default), "conceal", or "show".
+  rail               Prefix rendered lines. Defaults to "│ ".
+  highlights.text    Rendered text. Defaults to "ObsidianEmbedText".
+  highlights.rail    Rail. Defaults to "ObsidianEmbedRail".
+  highlights.warning Warnings. Defaults to "ObsidianEmbedWarning".
+  nowrap_overflow    Only "trunc" is supported; this is the default.
+
+source = "reveal_cursor" shows the raw token on the cursor row in each window.
+"conceal" requests hiding on all rows. "show" keeps source tokens alongside
+previews; tables show only the raw tokens in this mode.
+
+Neovim's window options still control concealment; the plugin does not change
+them. Use 'conceallevel' 2 to hide tokens. 'concealcursor' controls cursor-line
+concealment in each mode. In a Markdown FileType callback, for example: >lua
+  vim.opt_local.conceallevel = 2
+  -- For source = "conceal", hide cursor-line tokens in Normal mode too:
+  vim.opt_local.concealcursor = "n"
+<
+Rendered lines follow each window's 'wrap' and 'linebreak'. With 'nowrap',
+overflow is truncated. The presentation table lists all public options;
+recursion and scheduling limits are fixed implementation policy.
 
 ===============================================================================
-COMMANDS                                                    *obsidian-embed-commands*
+COMMANDS                                              *obsidian-embed-commands*
 
 :Obsidian embed toggle
         Toggle rendering in the current buffer.
 
 :Obsidian embed refresh
-        Refresh rendering in the current buffer.
+        Refresh rendering in the current buffer. See |obsidian-embed-refresh|.
 
 :Obsidian embed inspect
         Print the current buffer's lifecycle state.
+
+Lua equivalents (bufnr is optional and defaults to the current buffer): >lua
+  require("obsidian-embed").toggle(bufnr)
+  require("obsidian-embed").refresh(bufnr)
+  local state = require("obsidian-embed").inspect(bufnr)
+<
+
+===============================================================================
+EXAMPLES                                              *obsidian-embed-examples*
+
+Given Plan.md: >markdown
+  # Plan
+  Ship a small, useful improvement.
+
+  ## Next steps
+  Write the guide, then check the examples.
+
+  Keep the demo reproducible. ^summary
+
+  ## Later
+  Collect feedback.
+<
+Whole note: >markdown
+  ![[Plan]]
+<
+Includes the whole note except YAML frontmatter by default. Blank lines at the
+edges of a selected slice are trimmed; internal blank lines remain.
+
+Heading section and display alias: >markdown
+  ![[Plan#Next steps]]
+  ![[Plan#Next steps|Today]]
+<
+Renders the heading and its section, stopping before ## Later. The alias
+changes only the first rendered heading to ## Today. Whole-note aliases also
+replace a leading heading; aliases do not change a plain-text first line.
+
+Block and same-note selection: >markdown
+  ![[Plan#^summary]]
+  ![[#Next steps]]
+  ![[#^summary]]
+<
+The block preview is "Keep the demo reproducible." with its ID removed.
+An empty target selects the current note. Place a same-note embed outside the
+section/block it selects to avoid a cycle.
+
+Explicit relative and Markdown-style embeds: >markdown
+  ![[./Plan]]
+  ![[../Shared/Checklist]]
+  ![Plan](./Plan.md)
+  ![Today](./Plan.md#next-steps)
+<
+These paths resolve from the note containing the reference. The .md suffix
+can be omitted in the wiki form. Use normalized heading fragments such as
+next-steps in Markdown-style links. The current resolver does not decode
+percent-encoded heading fragments.
+
+Recursive embeds: if Projects/Overview.md contains: >markdown
+  Project overview:
+  ![[../Shared/Checklist]]
+<
+Then ![[Projects/Overview]] expands both notes. The child path resolves from
+Projects/Overview.md, not from the outer note. Beyond eight note levels, or
+when the same file and heading/block selection repeats in the expansion
+chain, rendering shows "Embed skipped: recursion limit reached". Both depth
+limits and cycles use this message; there is no setup option to raise it.
+
+Embeds in prose, lists, tasks, and blockquotes: >markdown
+  Reminder: ![[Plan#^summary]] before publishing.
+  - ![[Plan#^summary]]
+  - [ ] ![[Plan#Next steps]]
+  > ![[Plan#^summary]]
+<
+Prose stays on the source row and the preview appears below it. Multiple
+embeds on one row render below it in source order. Standalone embeds replace
+their source row's display when hidden. List/task/quote previews retain host
+indentation/markers. These previews do not insert target text into prose.
+
+===============================================================================
+LOOKUP AND EXCLUSIONS                                   *obsidian-embed-targets*
+
+Explicit ./ and ../ targets resolve directly relative to the containing note.
+Other targets try paths beside that note, at the workspace root, and under
+configured notes/daily-note folders, then search workspace reference IDs
+(including aliases). More than one match shows "Multiple matches for: ..."
+and renders the first candidate. Use a precise relative path instead of
+relying on candidate order. Missing targets show "Embed not found: ...";
+missing selections show "Heading not found: ..." or "Block not found: ...".
+
+URI targets, including https: and file:, and attachment suffixes recognized by
+obsidian.nvim (images, PDF, audio, video, .canvas, etc.) stay literal. These
+are excluded before provider matching, also inside nested embeds.
+
+Ordinary links and footnotes are not note embeds. Embed-like text in code
+spans, fenced/indented code blocks, HTML blocks/comments, and YAML frontmatter
+stays literal.
+
+===============================================================================
+TABLE PREVIEWS                                          *obsidian-embed-tables*
+
+In Markdown pipe tables, each embed shows the first nonblank rendered line
+within the display width of its source token. It can include the rail or a
+warning. Longer previews end with an ellipsis; preview pipes appear as broken
+bars, keeping later cell positions intact. Tables do not expand to multiple
+virtual lines. Example: >markdown
+  | Note | Status |
+  | --- | --- |
+  | ![[Plan#^summary]] | ready |
+<
+With source = "reveal_cursor", the raw token is visible on the cursor row.
+With source = "show", table embeds remain as raw tokens.
+
+===============================================================================
+REFRESH                                                *obsidian-embed-refresh*
+
+Source edits and edits to loaded dependency buffers (including unsaved edits)
+refresh automatically. Writes, observed note creation/renames, and
+FileChangedShellPost events also invalidate affected previews.
+
+There is no continuous filesystem watcher. After changing a target outside
+Neovim, use :checktime to detect/reload a loaded file, or explicitly refresh
+the host with :Obsidian embed refresh. Loaded buffer contents take precedence
+over disk; resolve/reload a modified target buffer if it is masking disk
+changes. Externally created files with no observed event need manual refresh.
+Refresh invalidates note lookup caches but preserves a disabled buffer's
+state; toggle rendering back on if needed.
+
+===============================================================================
+TROUBLESHOOTING                                 *obsidian-embed-troubleshooting*
+
+Setup fails or command missing:
+  Set up obsidian.nvim v3.16.8+ before this plugin; use Neovim 0.11+.
+  The examples use legacy_commands = false.
+
+No previews:
+  Open a named note inside a configured workspace. Check: >vim
+    :lua print(vim.b.obsidian_buffer)
+<
+  It should be true. Re-enter the note after setup. A .obsidian directory
+  alone is insufficient. Use :Obsidian embed toggle if rendering is disabled.
+
+Parser warning / degraded state:
+  Run :checkhealth vim.treesitter and, if installed,
+  :checkhealth nvim-treesitter. Install both parsers with matching queries
+  (|obsidian-embed-parsers|), then refresh.
+
+Table preview shifts neighboring cells:
+  Another highlighter may be concealing parts of the token. To isolate it,
+  try :lua vim.treesitter.stop() and :syntax off, then disable overlapping
+  conceal rules in your configuration. Neovim 0.12 starts a Markdown
+  highlighter automatically through its default filetype plugin.
+
+Tokens remain visible:
+  Check :setlocal conceallevel? concealcursor? and presentation.source.
+  Cursor-row reveal is the default; see |obsidian-embed-presentation|.
+
+Unexpected or missing target:
+  Check the workspace, file/heading/block spelling, and availability of rg
+  for workspace search. Use an explicit relative path to remove ambiguity.
+
+Stale preview:
+  See |obsidian-embed-refresh|. Run :Obsidian embed inspect to print lifecycle
+  state and diagnostics; refresh does not enable a disabled buffer.
 
 ===============================================================================
 PROVIDERS                                                  *obsidian-embed-providers*
@@ -120,5 +360,15 @@ Example for a small file embedded as ![[status.txt]]: >
 The example defers a small synchronous read. Use nonblocking I/O for larger
 work. Calling unregister() removes the provider; it does not cancel work
 already running, so stop that work in your integration before unregistering.
+
+===============================================================================
+LICENSE AND RELEASE DECISIONS                        *obsidian-embed-decisions*
+
+This checkout has no declared license or release tags. The author must select
+an intended license and approve its text/copyright attribution, then decide
+whether to publish a first tagged release and which compatibility guarantees
+it should make. No license is implied by dependency licenses. See the
+repository's doc/licensing-release.md for evidence and a concrete decision
+checklist. This documentation does not choose a license or publish a release.
 
 vim:tw=78:ts=8:noet:ft=help:norl:
