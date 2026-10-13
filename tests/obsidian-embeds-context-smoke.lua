@@ -354,4 +354,6 @@ test.assert_true(vim.wait(1000, function() return async_error ~= nil end, 10)
   and async_error:find("returned no result", 1, true),
   "asynchronous empty provider completions should become validation errors")
 
+dofile(vim.fs.joinpath(vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":h"), "obsidian-embeds-provider-projections.lua"))
+
 print("obsidian embeds context smoke test passed")

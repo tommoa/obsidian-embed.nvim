@@ -66,15 +66,67 @@ local function provider_render_async(ref, ctx, done)
   providers.render_async(provider, ref, public, function(result, err)
     if err then done(nil, "embed provider " .. provider.name .. ": " .. tostring(err)); return end
     for _, path in ipairs(result.dependencies or {}) do dependencies.track_path(ctx, path) end
-    done(result)
+    done(result, nil, provider.name)
   end, ctx.owner)
   return true
 end
 
-local function project_provider(result, width, depth)
-  local ok, lines = pcall(result.project, width)
-  if not ok then return warn_block("Embed provider error: " .. tostring(lines), depth) end
-  if type(lines) ~= "table" then return warn_block("Embed provider returned invalid projection", depth) end
+local function projection_path(line, chunk)
+  return "line " .. line .. (chunk and " chunk " .. chunk or "")
+end
+
+local function projection_list(value, path, line, chunk)
+  if type(value) ~= "table" or not vim.islist(value) then
+    error("invalid projection: " .. (line and projection_path(line, chunk) .. (path == "highlights" and " highlights" or "") or path) .. " must be a list", 0)
+  end
+  return #value
+end
+
+local function highlight_group(value)
+  return type(value) == "string"
+    or (type(value) == "number" and value >= -2 ^ 63 and value <= 2 ^ 63 and value % 1 == 0)
+end
+
+---Validate the public Neovim chunk shape before adding internal presentation
+---metadata. Check every entry, including sparse lists that ipairs would skip.
+local function validate_projection(lines)
+  projection_list(lines, "lines")
+  for line_index, line in ipairs(lines) do
+    projection_list(line, "line", line_index)
+    for chunk_index, chunk in ipairs(line) do
+      local size = projection_list(chunk, "chunk", line_index, chunk_index)
+      if size < 1 or size > 2 then
+        error("invalid projection: " .. projection_path(line_index, chunk_index) .. " must contain text and an optional highlight", 0)
+      end
+      if type(chunk[1]) ~= "string" then
+        error("invalid projection: " .. projection_path(line_index, chunk_index) .. " text must be a string", 0)
+      end
+      local group = chunk[2]
+      if type(group) == "table" then
+        projection_list(group, "highlights", line_index, chunk_index)
+        for index, stacked in ipairs(group) do
+          if not highlight_group(stacked) then
+            error("invalid projection: " .. projection_path(line_index, chunk_index) .. " highlight " .. index .. " must be a name or integer ID", 0)
+          end
+        end
+      elseif group ~= nil and not highlight_group(group) then
+        error("invalid projection: " .. projection_path(line_index, chunk_index) .. " highlight must be a name, integer ID, or list", 0)
+      end
+    end
+  end
+end
+
+local function project_provider(result, width, depth, provider_name)
+  -- Projection is deferred and can change with width. Protect both invocation
+  -- and validation on every call, including nested and table-cell projections.
+  local ok, lines = pcall(function()
+    local projected = result.project(width)
+    validate_projection(projected)
+    return projected
+  end)
+  if not ok then
+    return { warn_line("Embed provider " .. provider_name .. " error: " .. tostring(lines), depth) }
+  end
   return lines
 end
 
@@ -224,12 +276,12 @@ function M.render_ref_async(api, ref, ctx, done)
 
   -- Providers take precedence over the default note resolver. Keep their
   -- projection deferred until the presenter knows the host window width.
-  if provider_render_async(ref, ctx, function(result, provider_err)
+  if provider_render_async(ref, ctx, function(result, provider_err, provider_name)
     if provider_err then done(nil, provider_err); return end
     -- The provider's final line count depends on width. Reserve one line for
     -- scheduler accounting while preserving counts from surrounding note text.
     done(function(width)
-      return highlight.with_rail(project_provider(result, width, ctx.depth), opts())
+      return highlight.with_rail(project_provider(result, width, ctx.depth, provider_name), opts())
     end, nil, 1)
   end) then return end
 
@@ -346,14 +398,14 @@ function M.render_analyzed_row_state_async(api, buffer_state, row, analyzed_row,
     local source_token = analyzed_row.host.kind == "table"
       and buffer_state.source_lines[row + 1]:sub(ref.range.start_col + 1, ref.range.end_col)
     -- Accumulate one ref result before advancing to the next source ref.
-    local handled = provider_render_async(ref, ctx, function(result, provider_err)
+    local handled = provider_render_async(ref, ctx, function(result, provider_err, provider_name)
       if provider_err then done(nil, provider_err); return end
       rendered_refs[#rendered_refs + 1] = ref
       blocks[#blocks + 1] = {
         ref = ref,
         source_token = source_token,
         project = function(width)
-          return highlight.with_rail(project_provider(result, width, ctx.depth), opts())
+          return highlight.with_rail(project_provider(result, width, ctx.depth, provider_name), opts())
         end,
         line_count = 1,
       }
